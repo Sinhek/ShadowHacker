@@ -1,0 +1,161 @@
+
+import java.io.*;
+import java.net.*;
+import java.util.*;
+import java.util.concurrent.*;
+
+public class Server {
+
+    private static final Map<Integer, String> nodes = new ConcurrentHashMap<>();
+    private static final List<ClientHandler> clients = new CopyOnWriteArrayList<>();
+
+    public static void main(String[] args) {
+        int port = 5000;
+
+        // Railway/Render asignan el puerto en la variable PORT
+        String envPort = System.getenv("PORT");
+        if (envPort != null) {
+            port = Integer.parseInt(envPort);
+        }
+
+        // Inicializar nodos 1–10
+        for (int i = 1; i <= 10; i++) {
+            nodes.put(i, null);
+        }
+
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            System.out.println("[SERVER] Shadow Hackers escuchando en puerto " + port);
+
+            while (true) {
+                Socket socket = serverSocket.accept();
+                ClientHandler handler = new ClientHandler(socket);
+                clients.add(handler);
+                new Thread(handler).start();
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Enviar mensaje a todos los jugadores
+    public static void broadcast(String msg) {
+        for (ClientHandler c : clients) {
+            c.send(msg);
+        }
+    }
+
+    // Estado del juego
+    public static synchronized String getStatus() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("--- ESTADO DEL JUEGO ---\n");
+        for (int i = 1; i <= 10; i++) {
+            String owner = nodes.get(i);
+            sb.append("Nodo ").append(i).append(": ")
+              .append(owner == null ? "LIBRE" : owner)
+              .append("\n");
+        }
+        return sb.toString();
+    }
+
+    // Intento de hackeo
+    public static synchronized String hackNode(String player, int node) {
+        if (!nodes.containsKey(node)) {
+            return "ERROR: El nodo no existe.";
+        }
+
+        String owner = nodes.get(node);
+
+        if (player.equals(owner)) {
+            return "Ya controlas el nodo " + node;
+        }
+
+        nodes.put(node, player);
+        broadcast("[INFO] " + player + " ha capturado el nodo " + node);
+        return "Has capturado el nodo " + node;
+    }
+
+    // Clase manejadora de cada cliente
+    static class ClientHandler implements Runnable {
+        private Socket socket;
+        private BufferedReader in;
+        private PrintWriter out;
+        private String playerName;
+
+        public ClientHandler(Socket socket) {
+            this.socket = socket;
+        }
+
+        public void send(String msg) {
+            out.println(msg);
+        }
+
+        @Override
+        public void run() {
+            try {
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                out = new PrintWriter(socket.getOutputStream(), true);
+
+                out.println("Bienvenido a Shadow Hackers.");
+                out.print("Introduce tu nombre: ");
+                out.flush();
+
+                playerName = in.readLine();
+                if (playerName == null || playerName.isBlank()) {
+                    playerName = "Jugador_" + socket.getPort();
+                }
+
+                System.out.println("[SERVER] " + playerName + " conectado.");
+                broadcast("[INFO] " + playerName + " se ha unido a la partida.");
+
+                out.println("Comandos: HACK <nodo>, STATUS, EXIT");
+                out.println(Server.getStatus());
+
+                String line;
+                while ((line = in.readLine()) != null) {
+                    String[] parts = line.trim().split(" ");
+
+                    if (parts[0].equalsIgnoreCase("EXIT")) {
+                        break;
+                    }
+
+                    else if (parts[0].equalsIgnoreCase("STATUS")) {
+                        out.println(Server.getStatus());
+                    }
+
+                    else if (parts[0].equalsIgnoreCase("HACK")) {
+                        if (parts.length < 2) {
+                            out.println("Uso: HACK <nodo>");
+                            continue;
+                        }
+                        try {
+                            int node = Integer.parseInt(parts[1]);
+                            out.println(Server.hackNode(playerName, node));
+                        } catch (NumberFormatException e) {
+                            out.println("Nodo inválido.");
+                        }
+                    }
+
+                    else {
+                        out.println("Comando no reconocido.");
+                    }
+
+                    out.print("> ");
+                    out.flush();
+                }
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                try {
+                    socket.close();
+                } catch (IOException ignored) {}
+
+                clients.remove(this);
+                broadcast("[INFO] " + playerName + " ha salido del juego.");
+                System.out.println("[SERVER] " + playerName + " desconectado.");
+            }
+        }
+    }
+}
+
